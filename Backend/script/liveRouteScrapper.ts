@@ -805,60 +805,67 @@ async function fetchLocationMaps(page: Page): Promise<LocationMaps> {
   };
 
   const wire: WireMaps = await page.evaluate(() => {
-    const w = window as any;
-    const c = w.angularComponentRef.component;
+  // IMPORTANT: tsx/esbuild can inject calls like __name(fn,"fn") into this function body.
+  // In the browser context, __name does not exist, so we define a no-op version here.
+  // This prevents: ReferenceError: __name is not defined
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const __name = (target: any, _value: string) => target;
 
-    function norm(s: string): string {
-      return String(s || '')
-        .toUpperCase()
-        .replace(/\s+/g, '')
-        .replace(/-/g, '')
-        .replace(/\./g, '')
-        .replace(/_/g, '');
+  const w = window as any;
+  const c = w.angularComponentRef.component;
+
+  const norm = (s: string): string => {
+    return String(s || '')
+      .toUpperCase()
+      .replace(/\s+/g, '')
+      .replace(/-/g, '')
+      .replace(/\./g, '')
+      .replace(/_/g, '');
+  };
+
+  const extractCodeInParens = (name: string): string => {
+    const str = String(name || '');
+    const matches = str.match(/\(([^)]+)\)/g);
+    if (!matches || !matches.length) return '';
+    const last = matches[matches.length - 1];
+    return last.replace(/[()]/g, '').trim();
+  };
+
+  const cityList: any[] = c.dropdownCityList || [];
+  const landmarkList: any[] = c.dropdownLandmarkList || [];
+
+  const city = cityList
+    .map((item) => {
+      const rawName = String(item.itemName || '');
+      const lat = typeof item.latitude === 'number' ? item.latitude : null;
+      const lng = typeof item.longitude === 'number' ? item.longitude : null;
+      const key = norm(rawName);
+      return { key, rawName, lat, lng };
+    })
+    .filter((x) => x.lat != null && x.lng != null);
+
+  const landmarkByCode: any[] = [];
+  const landmarkByName: any[] = [];
+
+  for (const lm of landmarkList) {
+    const rawName = String(lm.itemName || '');
+    const lat = typeof lm.lat === 'number' ? lm.lat : null;
+    const lng = typeof lm.lng === 'number' ? lm.lng : null;
+    if (lat == null || lng == null) continue;
+
+    const normName = norm(rawName);
+    landmarkByName.push({ key: normName, rawName, lat, lng });
+
+    const code = extractCodeInParens(rawName);
+    if (code) {
+      const normCode = norm(code);
+      landmarkByCode.push({ key: normCode, rawName, lat, lng });
     }
+  }
 
-    function extractCodeInParens(name: string): string {
-      const str = String(name || '');
-      const matches = str.match(/\(([^)]+)\)/g);
-      if (!matches || !matches.length) return '';
-      const last = matches[matches.length - 1];
-      return last.replace(/[()]/g, '').trim();
-    }
+  return { city, landmarkByCode, landmarkByName };
+});
 
-    const cityList: any[] = c.dropdownCityList || [];
-    const landmarkList: any[] = c.dropdownLandmarkList || [];
-
-    const city: WireEntry[] = cityList
-      .map((item) => {
-        const rawName = String(item.itemName || '');
-        const lat = typeof item.latitude === 'number' ? item.latitude : null;
-        const lng = typeof item.longitude === 'number' ? item.longitude : null;
-        const key = norm(rawName);
-        return { key, rawName, lat, lng };
-      })
-      .filter((x) => x.lat != null && x.lng != null);
-
-    const landmarkByCode: WireEntry[] = [];
-    const landmarkByName: WireEntry[] = [];
-
-    for (const lm of landmarkList) {
-      const rawName = String(lm.itemName || '');
-      const lat = typeof lm.lat === 'number' ? lm.lat : null;
-      const lng = typeof lm.lng === 'number' ? lm.lng : null;
-      if (lat == null || lng == null) continue;
-
-      const normName = norm(rawName);
-      landmarkByName.push({ key: normName, rawName, lat, lng });
-
-      const code = extractCodeInParens(rawName);
-      if (code) {
-        const normCode = norm(code);
-        landmarkByCode.push({ key: normCode, rawName, lat, lng });
-      }
-    }
-
-    return { city, landmarkByCode, landmarkByName };
-  });
 
   const cityByNormName = new Map<string, LocationEntry>();
   wire.city.forEach((c) => {
