@@ -1,0 +1,50 @@
+name: Live Routes Scraper (15 min)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: live-routes-scraper
+  cancel-in-progress: true
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      FMS_URL: ${{ secrets.FMS_URL }}
+      FMS_USERNAME: ${{ secrets.FMS_USERNAME }}
+      FMS_PASSWORD: ${{ secrets.FMS_PASSWORD }}
+      HEADLESS: "true"
+      NODE_ENV: "production"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run scraper
+        run: npm run scrape:live
