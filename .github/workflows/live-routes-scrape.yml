@@ -14,10 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    defaults:
-      run:
-        working-directory: backend
-
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       FMS_URL: ${{ secrets.FMS_URL }}
@@ -30,21 +26,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Debug step (keep for now; remove later if you want)
+      - name: Debug repo structure
+        run: |
+          echo "Root:"
+          ls -la
+          echo "Backend:"
+          ls -la Backend || true
+          echo "Lockfiles:"
+          find . -maxdepth 3 -name "package-lock.json" -o -name "yarn.lock" -o -name "pnpm-lock.yaml"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: backend/package.json
+          cache-dependency-path: Backend/package-lock.json
 
       - name: Install dependencies
+        working-directory: Backend
         run: npm ci
 
-      - name: Install Playwright browsers
+      - name: Install Playwright browser (Chromium)
+        working-directory: Backend
         run: npx playwright install --with-deps chromium
 
-      - name: Generate Prisma client
+      - name: Generate Prisma Client
+        working-directory: Backend
         run: npx prisma generate
 
-      - name: Run scraper
+      - name: Run Live Route Scraper
+        working-directory: Backend
         run: npm run scrape:live
