@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id             String   @id @default(cuid())
+  name           String
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  billingAddress String?
+  code           String?
+  contactEmail   String?
+  contactPhone   String?
+  gstin          String?
+  pan            String?
+  branches       Branch[]
+  users          User[]
+}
+
+model User {
+  id          String       @id @default(cuid())
+  email       String       @unique
+  password    String
+  name        String
+  role        Role         @default(OperationsController)
+  isActive    Boolean      @default(true)
+  phone       String?
+  lastLoginAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  companyId   String
+  branchId    String?
+  branch      Branch?      @relation(fields: [branchId], references: [id])
+  company     Company      @relation(fields: [companyId], references: [id])
+  branches    UserBranch[]
+
+  @@index([role])
+  @@index([isActive])
+  @@index([companyId])
+}
+
+model UserBranch {
+  id        String   @id @default(cuid())
+  userId    String
+  branchId  String
+  createdAt DateTime @default(now())
+  branch    Branch   @relation(fields: [branchId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, branchId])
+  @@index([branchId])
+}
+
+model AuthSession {
+  id         String   @id @default(cuid())
+  userId     String
+  refreshJti String   @unique
+  userAgent  String?
+  ipAddr     String?
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+}
+
+model Branch {
+  id         String              @id @default(cuid())
+  name       String              @unique
+  code       String?
+  companyId  String
+  company    Company             @relation(fields: [companyId], references: [id])
+  sequence   BranchTripSequence?
+  drivers    Driver[]
+  trips      Trip[]
+  pairs      TripPair[]
+  userAdmins User[]
+  users      UserBranch[]
+
+  @@index([name])
+  @@index([companyId])
+}
+
+model Vehicle {
+  Vehicle_Number String       @id
+  Vehicle_Type   VehicleType
+  Vehicle_Route  String?
+  branchId       String?
+  assignments    Assignment[]
+  trips          Trip[]
+
+  @@index([branchId])
+}
+
+model Route {
+  id                 String              @id @default(cuid())
+  RouteName          String              @unique
+  RouteCombinedCodes String?
+  Route_Side         TripSide?
+  GivenTransitTime   String?
+  Fixed_Price        Float?
+  Destination        String?
+  Middle_Stops       String[]
+  Source             String?
+  priceDetails       RouteVehiclePrice[]
+
+  @@index([RouteName])
+}
+
+model RouteVehiclePrice {
+  id                String      @id @default(cuid())
+  routeId           String
+  vehicleType       VehicleType
+  Fixed_Diesel      Float
+  Fixed_Advance     Float
+  CompanyLateCharge Float?      @default(300)
+  route             Route       @relation(fields: [routeId], references: [id])
+
+  @@unique([routeId, vehicleType])
+}
+
+model Driver {
+  id             String       @id @default(cuid())
+  Driver_Code    String       @unique
+  Driver_Name    String
+  Driver_License String?
+  Driver_Balance Float        @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  branchId       String
+  assignments    Assignment[]
+  branch         Branch       @relation(fields: [branchId], references: [id])
+
+  @@index([Driver_Code])
+  @@index([branchId])
+}
+
+model Assignment {
+  id             String    @id @default(cuid())
+  Vehicle_Number String
+  Driver_Code    String
+  Start_At       DateTime
+  End_At         DateTime?
+  driver         Driver    @relation(fields: [Driver_Code], references: [Driver_Code])
+  vehicle        Vehicle   @relation(fields: [Vehicle_Number], references: [Vehicle_Number])
+
+  @@unique([Vehicle_Number, Driver_Code, Start_At])
+  @@index([Vehicle_Number])
+  @@index([Driver_Code])
+  @@index([Start_At])
+  @@index([End_At])
+}
+
+model Trip {
+  id                       String       @id @default(cuid())
+  Route_Start_Date_Time    DateTime
+  Route_Reaching_Date_Time DateTime?
+  Vehicle_Number           String
+  RPS_No                   String
+  RouteName                String
+  Route_Code               String?
+  Transit_Time             String?
+  Trip_Side                TripSide?
+  Vehicle_Type             VehicleType?
+  Vehicle_Route            String?
+  branchId                 String?
+  Fixed_Diesel             Float?
+  Fixed_Advance            Float?
+  Trip_Number              String?
+  pairId                   String?
+  CreatedAt                DateTime     @default(now())
+  vehicle                  Vehicle      @relation(fields: [Vehicle_Number], references: [Vehicle_Number])
+  branch                   Branch?      @relation(fields: [branchId], references: [id])
+
+  @@unique([Vehicle_Number, Route_Start_Date_Time, RouteName, RPS_No], name: "Unique_Scraper_Trip")
+  @@index([Vehicle_Number])
+  @@index([branchId])
+  @@index([Trip_Number])
+}
+
+model TripPair {
+  id                     String      @id @default(cuid())
+  Trip_Number            String
+  branchId               String
+  Vehicle_Number         String
+  Up_TripId              String?
+  Down_TripId            String?
+  status                 PairStatus  @default(Incomplete)
+  missing                MissingSide @default(None)
+  Driver_Code            String?
+  Driver_Name            String?
+  Driver_License         String?
+  Driver_Opening_Balance Float?
+  Driver_Closing_Balance Float?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  branch                 Branch      @relation(fields: [branchId], references: [id])
+
+  @@unique([branchId, Trip_Number], name: "Unique_Trip_Number_Per_Branch")
+  @@index([Vehicle_Number])
+  @@index([Driver_Code])
+}
+
+model BranchTripSequence {
+  id        String   @id @default(cuid())
+  branchId  String   @unique
+  prefix    String?
+  lastSeq   Int      @default(0)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+  branch    Branch   @relation(fields: [branchId], references: [id])
+}
+
+model LiveRoute {
+  id          String        @id
+  source      String
+  destination String
+  sourceLat   Float?
+  sourceLng   Float?
+  destLat     Float?
+  destLng     Float?
+  updatedAt   DateTime
+  LiveVehicle LiveVehicle[]
+}
+
+model LiveVehicle {
+  id               String    @id
+  vehicleNumber    String?
+  rpsNumber        String?
+  dispatchDate     DateTime?
+  lastLocationDate DateTime?
+  lastLocation     String?
+  lat              Float?
+  lng              Float?
+  expectedArrival  DateTime?
+  lateHours        Float?
+  middleStops      String[]
+  direction        TripSide
+  routeId          String
+  LiveRoute        LiveRoute @relation(fields: [routeId], references: [id])
+}
+
+model Location {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  Latitude  Float
+  Longitude Float
+
+  @@index([name])
+}
+
+model UnmatchedTripSide {
+  id          String    @id @default(cuid())
+  RouteName   String    @unique
+  RouteCode   String?
+  Source      String
+  Destination String
+  Trip_Side   TripSide?
+  createdAt   DateTime  @default(now())
+
+  @@index([Trip_Side])
+}
+
+enum TripSide {
+  Up
+  Down
+}
+
+enum PairStatus {
+  Incomplete
+  Completed
+}
+
+enum MissingSide {
+  None
+  Up
+  Down
+}
+
+enum VehicleType {
+  M32XL
+  S32XL
+  S24XL
+  S22XL
+  S17XL
+  S14XL
+  OTHER
+}
+
+enum Role {
+  OperationsController
+  Accountant
+  Manager
+  Admin
+  Ceo
+}
