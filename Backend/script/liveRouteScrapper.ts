@@ -1,10 +1,12 @@
-// backend/script/liveRouteScrapper.ts
+// Backend/script/liveRouteScrapper.ts
 import { chromium, Page } from 'playwright';
 import * as dotenv from 'dotenv';
 import * as XLSX from 'xlsx';
 import { PrismaClient, TripSide, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
+// In GitHub Actions you typically won’t have .env; secrets are injected as env vars.
+// This call is safe locally; it does nothing if .env is absent.
 dotenv.config({ path: './.env' });
 
 // ------------------- ENV + PRISMA SETUP -------------------
@@ -17,7 +19,7 @@ const USERNAME = process.env.FMS_USERNAME;
 const PASSWORD = process.env.FMS_PASSWORD;
 
 if (!USERNAME || !PASSWORD) {
-  console.error('Missing FMS_USERNAME or FMS_PASSWORD in .env');
+  console.error('Missing FMS_USERNAME or FMS_PASSWORD in env');
   process.exit(1);
 }
 
@@ -40,45 +42,9 @@ function normalizeLocationKey(s: string): string {
     .replace(/_/g, '');
 }
 
-// function buildRouteEndpointKey(name: string): string {
-//   let s = String(name || '').toLowerCase();
-
-//   // remove anything in parentheses
-//   s = s.replace(/\([^)]*\)/g, ' ');
-
-//   // replace hyphens with spaces (main noisy symbol)
-//   s = s.replace(/-/g, ' ');
-
-//   // remove numbers
-//   s = s.replace(/[0-9]+/g, ' ');
-
-//   // remove other non-alphanumeric symbols
-//   s = s.replace(/[^a-z\s]+/g, ' ');
-
-//   // collapse spaces
-//   s = s.replace(/\s+/g, ' ').trim();
-
-//   // remove 'safexpress' prefix if present
-//   s = s.replace(/^safexpress\s+/, '');
-
-//   // remove suffixes if present as last word
-//   s = s.replace(/\s+(hub|sds|inbound|outbound)\s*$/g, '');
-
-//   // collapse spaces again
-//   s = s.replace(/\s+/g, ' ').trim();
-
-//   // finally remove all spaces (build the core key)
-//   s = s.replace(/\s+/g, '');
-
-//   return s;
-// }
-
-
 // Extract branch code inside last parentheses – TS version
 function normalizeSimple(name: string): string {
-  return String(name || '')
-    .toLowerCase()
-    .replace(/\s+/g, '');     // remove all spaces
+  return String(name || '').toLowerCase().replace(/\s+/g, '');
 }
 
 function extractCodeInParensTS(name: string): string {
@@ -164,13 +130,11 @@ function extractBranchCodeFromConsignee(consigneeName: string): string {
 }
 
 // Normalize for matching Route.Source / Route.Destination with consigner/consignee
-// IMPORTANT: remove ALL spaces + also remove '-' and '_' for safety.
 function makeRouteKey(source: string, destination: string): string {
   const src = normalizeSimple(source);
   const dst = normalizeSimple(destination);
   return `${src}___${dst}`;
 }
-
 
 type RouteIndexItem = {
   id: string;
@@ -276,14 +240,11 @@ async function buildRouteIndex(): Promise<Map<string, RouteIndexItem>> {
 
   for (const r of routes) {
     if (!r.Source || !r.Destination) continue;
-
     const key = makeRouteKey(r.Source, r.Destination);
     map.set(key, r);
   }
 
-  console.log(
-    `Route index built with ${map.size} (Source,Destination) keys.`,
-  );
+  console.log(`Route index built with ${map.size} (Source,Destination) keys.`);
   return map;
 }
 
@@ -331,15 +292,9 @@ function collectUnmatched(merged: LiveMergedRow[]): UnmatchedRoutePair[] {
   const result: UnmatchedRoutePair[] = [];
 
   for (const row of merged) {
-    if (row.routeId) continue; // matched, skip
+    if (row.routeId) continue;
 
-    const key =
-      row.matchKey +
-      '|' +
-      row.consignerName +
-      '|' +
-      row.consigneeName;
-
+    const key = row.matchKey + '|' + row.consignerName + '|' + row.consigneeName;
     if (seen.has(key)) continue;
     seen.add(key);
 
@@ -356,16 +311,14 @@ function collectUnmatched(merged: LiveMergedRow[]): UnmatchedRoutePair[] {
 }
 
 // Build RouteName / Source / Destination for UnmatchedTripSide
-// RouteName = Source/MiddleStops/Destination
-// If no middle stops: Source/Destination
 function buildUnmatchedRouteInfo(
   pair: UnmatchedRoutePair,
 ): { routeName: string; source: string; destination: string } | null {
-  // Prefer extracted source/dest; fall back to parsing; last fallback raw strings
   const sourceRaw =
     pair.sourceExtracted ||
     extractSourceFromConsigner(pair.consignerName) ||
     pair.consignerName;
+
   const destinationRaw =
     pair.destinationExtracted ||
     extractDestinationFromConsignee(pair.consigneeName) ||
@@ -374,28 +327,20 @@ function buildUnmatchedRouteInfo(
   const source = String(sourceRaw || '').trim();
   const destination = String(destinationRaw || '').trim();
 
-  if (!source || !destination) {
-    return null; // not enough info to store
-  }
+  if (!source || !destination) return null;
 
-  // Middle stops from consigneeName: all parts except the last (split on ';')
   const consigneeParts = String(pair.consigneeName || '')
     .split(';')
     .map((p) => p.trim())
     .filter(Boolean);
 
   let middleStops: string[] = [];
-  if (consigneeParts.length > 1) {
-    // everything except last is treated as middle stops
-    middleStops = consigneeParts.slice(0, -1);
-  }
+  if (consigneeParts.length > 1) middleStops = consigneeParts.slice(0, -1);
 
-  let routeName: string;
-  if (middleStops.length > 0) {
-    routeName = [source, ...middleStops, destination].join('/');
-  } else {
-    routeName = `${source}/${destination}`;
-  }
+  const routeName =
+    middleStops.length > 0
+      ? [source, ...middleStops, destination].join('/')
+      : `${source}/${destination}`;
 
   return { routeName, source, destination };
 }
@@ -418,7 +363,7 @@ async function saveUnmatchedToDb(unmatched: UnmatchedRoutePair[]): Promise<void>
       RouteName: routeName,
       Source: source,
       Destination: destination,
-      Trip_Side: null, // user will fill Up/Down later
+      Trip_Side: null,
     });
   }
 
@@ -430,7 +375,7 @@ async function saveUnmatchedToDb(unmatched: UnmatchedRoutePair[]): Promise<void>
   try {
     const result = await prisma.unmatchedTripSide.createMany({
       data,
-      skipDuplicates: true, // skip existing RouteName (unique constraint)
+      skipDuplicates: true,
     });
 
     console.log(
@@ -444,7 +389,6 @@ async function saveUnmatchedToDb(unmatched: UnmatchedRoutePair[]): Promise<void>
   }
 }
 
-
 // Parse "HH:MM:SS" delay string into hours (float)
 function parseDelayToHours(delay: string): number {
   if (!delay) return 0;
@@ -455,7 +399,6 @@ function parseDelayToHours(delay: string): number {
 }
 
 // For ETA, if multiple timestamps separated by ';', take the last NON-NA entry
-// (final destination ETA). Format is "DD/MM/YYYY HH:MM:SS".
 function pickEtaForDestination(eta: string): string {
   if (!eta) return '';
   const parts = eta
@@ -475,10 +418,7 @@ function aggregateLiveRoutes(
   const routeMap = new Map<string, LiveRouteRoute>();
 
   for (const row of merged) {
-    if (!row.routeId || !row.routeSource || !row.routeDestination) {
-      // skip unmatched routes here; we'll handle them via collectUnmatched()
-      continue;
-    }
+    if (!row.routeId || !row.routeSource || !row.routeDestination) continue;
 
     let bucket = routeMap.get(row.routeId);
     if (!bucket) {
@@ -498,7 +438,6 @@ function aggregateLiveRoutes(
 
     const lateHours = parseDelayToHours(row.delayTime);
 
-    // per-vehicle lat/lng if we have it
     const coordKey = row.vehicleNumber.trim();
     const coord = coordsByVehicle.get(coordKey);
     const lat = coord?.lat ?? null;
@@ -519,32 +458,22 @@ function aggregateLiveRoutes(
 
     let sideBucket: LiveRouteSideBucket | null = null;
 
-    if (row.routeSide === 'Up') {
-      sideBucket = bucket.up;
-    } else if (row.routeSide === 'Down') {
-      sideBucket = bucket.down;
-    } else {
-      console.warn(
-        'Row has no valid routeSide (neither Up nor Down), skipping from side buckets:',
-        {
-          routeId: row.routeId,
-          routeName: row.routeName,
-          source: row.routeSource,
-          destination: row.routeDestination,
-          routeSide: row.routeSide,
-          vehicleNumber: row.vehicleNumber,
-        },
-      );
-      continue; // do not put in up/down
+    if (row.routeSide === 'Up') sideBucket = bucket.up;
+    else if (row.routeSide === 'Down') sideBucket = bucket.down;
+    else {
+      console.warn('Row has no valid routeSide (neither Up nor Down), skipping:', {
+        routeId: row.routeId,
+        routeName: row.routeName,
+        routeSide: row.routeSide,
+        vehicleNumber: row.vehicleNumber,
+      });
+      continue;
     }
 
     sideBucket.vehicles.push(vehicleEntry);
     sideBucket.totalVehicles += 1;
-    if (lateHours > 0) {
-      sideBucket.lateVehicles += 1;
-    }
+    if (lateHours > 0) sideBucket.lateVehicles += 1;
 
-    // If bucket-level coords not yet set (for this route id), fill from this row
     if (bucket.sourceLat == null && row.routeSourceLat != null) {
       bucket.sourceLat = row.routeSourceLat;
       bucket.sourceLng = row.routeSourceLng ?? null;
@@ -568,14 +497,12 @@ function parseRows(rows: any[]): ParsedRow[] {
 
   const headerRow: string[] = rows[0] as string[];
 
-  // build a mapping from normalized header -> column index
   const headerIndexMap: Record<string, number> = {};
   headerRow.forEach((rawHeader, idx) => {
     const norm = normalizeHeader(String(rawHeader));
     if (norm) headerIndexMap[norm] = idx;
   });
 
-  // build mapping from our logical keys -> actual index
   const colIndex = {
     vehicleNumber: headerIndexMap[normalizeHeader(TARGET_HEADERS.vehicleNumber)],
     lastLocationDate:
@@ -601,19 +528,17 @@ function parseRows(rows: any[]): ParsedRow[] {
 
   console.log('Resolved column indices:', colIndex);
 
-  const dataRows = rows.slice(1); // skip header row
+  const dataRows = rows.slice(1);
 
   const result: ParsedRow[] = dataRows
     .map((row) => {
       const r = row as (string | number | null | undefined)[];
 
-      const get = (idx: number | undefined) =>
-        idx == null ? undefined : r[idx];
+      const get = (idx: number | undefined) => (idx == null ? undefined : r[idx]);
 
       return {
         vehicleNumber: get(colIndex.vehicleNumber)?.toString().trim() ?? '',
-        lastLocationDate:
-          get(colIndex.lastLocationDate)?.toString().trim() ?? '',
+        lastLocationDate: get(colIndex.lastLocationDate)?.toString().trim() ?? '',
         vehicleGroup: get(colIndex.vehicleGroup)?.toString().trim() ?? '',
         lastLocation: get(colIndex.lastLocation)?.toString().trim() ?? '',
         speedKmph: get(colIndex.speedKmph)?.toString().trim() ?? '',
@@ -622,29 +547,22 @@ function parseRows(rows: any[]): ParsedRow[] {
         dispatchDate: get(colIndex.dispatchDate)?.toString().trim() ?? '',
         eta: get(colIndex.eta)?.toString().trim() ?? '',
         plannedDistance: get(colIndex.plannedDistance)?.toString().trim() ?? '',
-        remainingDistance:
-          get(colIndex.remainingDistance)?.toString().trim() ?? '',
+        remainingDistance: get(colIndex.remainingDistance)?.toString().trim() ?? '',
         tripStatus: get(colIndex.tripStatus)?.toString().trim() ?? '',
         delayTime: get(colIndex.delayTime)?.toString().trim() ?? '',
         rpsNumber: get(colIndex.rpsNumber)?.toString().trim() ?? '',
       };
     })
-    // filter out totally empty rows
-    .filter((r) =>
-      Object.values(r).some((val) => val !== '' && val != null),
-    );
+    .filter((r) => Object.values(r).some((val) => val !== '' && val != null));
 
   return result;
 }
 
 // ------------------- MAP VIEW COORDINATE SCRAPING -------------------
 
-// Open the Angular Map View page *from the On Trip card dropdown*,
-// using the same pattern as Grid View (but choosing "Map View" instead).
 async function openMapView(page: Page): Promise<void> {
   console.log('Opening Map View from On Trip card dropdown…');
 
-  // 1) Close Grid View modal if it is still open (overlay blocking clicks).
   const modalCloseBtn = page.locator(
     'modal-container button.close, ' +
       'modal-container button[aria-label="Close"], ' +
@@ -663,23 +581,18 @@ async function openMapView(page: Page): Promise<void> {
     console.warn('Could not detect/close modal (may already be closed):', err);
   }
 
-  // 2) Hover on the "On Trip Vehicles" card again
   const onTripCard = page.locator('#onTrip');
   await onTripCard.waitFor({ state: 'visible', timeout: 15000 });
   await onTripCard.hover();
-  await page.waitForTimeout(700); // let the hover menu appear
+  await page.waitForTimeout(700);
 
-  // 3) Click the dropdown (same one you used for Grid View)
   const dropdownBtn = onTripCard.locator('button#dropdownMenuButton');
   await dropdownBtn.waitFor({ state: 'visible', timeout: 5000 });
   await dropdownBtn.click();
   await page.waitForTimeout(500);
 
-  // 4) Choose the "Map View" option inside that dropdown
   const mapViewOption = page.locator(
-    'button:has-text("Map View"), ' +
-      'a:has-text("Map View"), ' +
-      'li:has-text("Map View")',
+    'button:has-text("Map View"), ' + 'a:has-text("Map View"), ' + 'li:has-text("Map View")',
   );
   await mapViewOption.first().waitFor({ state: 'visible', timeout: 5000 });
   await mapViewOption.first().click();
@@ -689,50 +602,28 @@ async function openMapView(page: Page): Promise<void> {
   await page.waitForTimeout(3000);
 }
 
-// Read live lat/lng for each vehicle and return a Map keyed by vehicleNumber.
 async function fetchLiveVehicleCoords(
   page: Page,
 ): Promise<Map<string, { lat: number | null; lng: number | null }>> {
-  // Go to map view (via On Trip card dropdown)
   await openMapView(page);
 
-  // -------- CLICK "All Vehicles" CHECKBOX --------
+  // Click "All Vehicles" reliably by clicking the LABEL (not the hidden input)
   try {
-    const allVehiclesCheckbox = page.locator(
-      'label.checkmark-container:has-text("All Vehicles") input[type="checkbox"][value="all"]',
-    );
+    const allVehiclesLabel = page.locator('label.checkmark-container:has-text("All Vehicles")');
+    await allVehiclesLabel.waitFor({ state: 'visible', timeout: 10000 });
+    await allVehiclesLabel.scrollIntoViewIfNeeded();
+    await allVehiclesLabel.click({ force: true });
 
-    await allVehiclesCheckbox.waitFor({ state: 'visible', timeout: 10000 });
-
-    try {
-      const allVehiclesLabel = page.locator('label.checkmark-container:has-text("All Vehicles")');
-      await allVehiclesLabel.waitFor({ state: 'visible', timeout: 10000 });
-    
-      await allVehiclesLabel.scrollIntoViewIfNeeded();
-      await allVehiclesLabel.click({ force: true });
-    
-      console.log('Clicked "All Vehicles" label on Map View.');
-      await page.waitForLoadState('networkidle').catch(() => {});
-      await page.waitForTimeout(2000);
-    } catch (err) {
-      console.warn(
-        'Could not click "All Vehicles" (maybe already checked or selector mismatch):',
-        err,
-      );
-    }
-
-    console.log('Clicked "All Vehicles" checkbox on Map View.');
-
+    console.log('Clicked "All Vehicles" label on Map View.');
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(2000);
   } catch (err) {
     console.warn(
-      'Could not click "All Vehicles" checkbox (maybe already checked or selector mismatch):',
+      'Could not click "All Vehicles" (maybe already checked or selector mismatch):',
       err,
     );
   }
 
-  // -------- WAIT FOR ANGULAR MAP DATA --------
   await page.waitForFunction(
     () => {
       const w = window as any;
@@ -748,7 +639,6 @@ async function fetchLiveVehicleCoords(
     { timeout: 30000 },
   );
 
-  // -------- EXTRACT COORDINATES + VEHICLE NUMBERS --------
   const coords: VehicleCoord[] = await page.evaluate(() => {
     const w = window as any;
     const c = w.angularComponentRef.component;
@@ -758,9 +648,7 @@ async function fetchLiveVehicleCoords(
 
     const metaByVehicleId = new Map<number, any>();
     for (const m of markersList) {
-      if (m && m.vehicleId != null) {
-        metaByVehicleId.set(m.vehicleId, m);
-      }
+      if (m && m.vehicleId != null) metaByVehicleId.set(m.vehicleId, m);
     }
 
     const out: VehicleCoord[] = [];
@@ -779,16 +667,9 @@ async function fetchLiveVehicleCoords(
     return out;
   });
 
-  console.log(
-    `Fetched live coordinates for ${coords.length} vehicles from Map View.`,
-  );
+  console.log(`Fetched live coordinates for ${coords.length} vehicles from Map View.`);
 
-  return new Map(
-    coords.map((v) => [
-      v.vehicleNumber,
-      { lat: v.lat, lng: v.lng },
-    ]),
-  );
+  return new Map(coords.map((v) => [v.vehicleNumber, { lat: v.lat, lng: v.lng }]));
 }
 
 // Build location maps for cities and landmarks from Map View dropdowns
@@ -820,78 +701,77 @@ async function fetchLocationMaps(page: Page): Promise<LocationMaps> {
     landmarkByName: WireEntry[];
   };
 
+  // IMPORTANT: NO inner helper functions here.
+  // This avoids tsx/esbuild injecting "__name" into the evaluated payload.
   const wire: WireMaps = await page.evaluate(() => {
-  // IMPORTANT: tsx/esbuild can inject calls like __name(fn,"fn") into this function body.
-  // In the browser context, __name does not exist, so we define a no-op version here.
-  // This prevents: ReferenceError: __name is not defined
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const __name = (target: any, _value: string) => target;
+    const w = window as any;
+    const c = w.angularComponentRef.component;
 
-  const w = window as any;
-  const c = w.angularComponentRef.component;
+    const cityList: any[] = c.dropdownCityList || [];
+    const landmarkList: any[] = c.dropdownLandmarkList || [];
 
-  const norm = (s: string): string => {
-    return String(s || '')
-      .toUpperCase()
-      .replace(/\s+/g, '')
-      .replace(/-/g, '')
-      .replace(/\./g, '')
-      .replace(/_/g, '');
-  };
+    const city: any[] = [];
+    for (const item of cityList) {
+      const rawName = String(item?.itemName || '');
+      const lat = typeof item?.latitude === 'number' ? item.latitude : null;
+      const lng = typeof item?.longitude === 'number' ? item.longitude : null;
 
-  const extractCodeInParens = (name: string): string => {
-    const str = String(name || '');
-    const matches = str.match(/\(([^)]+)\)/g);
-    if (!matches || !matches.length) return '';
-    const last = matches[matches.length - 1];
-    return last.replace(/[()]/g, '').trim();
-  };
+      if (lat == null || lng == null) continue;
 
-  const cityList: any[] = c.dropdownCityList || [];
-  const landmarkList: any[] = c.dropdownLandmarkList || [];
+      const key = rawName
+        .toUpperCase()
+        .replace(/\s+/g, '')
+        .replace(/-/g, '')
+        .replace(/\./g, '')
+        .replace(/_/g, '');
 
-  const city = cityList
-    .map((item) => {
-      const rawName = String(item.itemName || '');
-      const lat = typeof item.latitude === 'number' ? item.latitude : null;
-      const lng = typeof item.longitude === 'number' ? item.longitude : null;
-      const key = norm(rawName);
-      return { key, rawName, lat, lng };
-    })
-    .filter((x) => x.lat != null && x.lng != null);
-
-  const landmarkByCode: any[] = [];
-  const landmarkByName: any[] = [];
-
-  for (const lm of landmarkList) {
-    const rawName = String(lm.itemName || '');
-    const lat = typeof lm.lat === 'number' ? lm.lat : null;
-    const lng = typeof lm.lng === 'number' ? lm.lng : null;
-    if (lat == null || lng == null) continue;
-
-    const normName = norm(rawName);
-    landmarkByName.push({ key: normName, rawName, lat, lng });
-
-    const code = extractCodeInParens(rawName);
-    if (code) {
-      const normCode = norm(code);
-      landmarkByCode.push({ key: normCode, rawName, lat, lng });
+      city.push({ key, rawName, lat, lng });
     }
-  }
 
-  return { city, landmarkByCode, landmarkByName };
-});
+    const landmarkByCode: any[] = [];
+    const landmarkByName: any[] = [];
 
+    for (const lm of landmarkList) {
+      const rawName = String(lm?.itemName || '');
+      const lat = typeof lm?.lat === 'number' ? lm.lat : null;
+      const lng = typeof lm?.lng === 'number' ? lm.lng : null;
+      if (lat == null || lng == null) continue;
+
+      const normName = rawName
+        .toUpperCase()
+        .replace(/\s+/g, '')
+        .replace(/-/g, '')
+        .replace(/\./g, '')
+        .replace(/_/g, '');
+
+      landmarkByName.push({ key: normName, rawName, lat, lng });
+
+      const matches = rawName.match(/\(([^)]+)\)/g);
+      const code =
+        matches && matches.length
+          ? matches[matches.length - 1].replace(/[()]/g, '').trim()
+          : '';
+
+      if (code) {
+        const normCode = code
+          .toUpperCase()
+          .replace(/\s+/g, '')
+          .replace(/-/g, '')
+          .replace(/\./g, '')
+          .replace(/_/g, '');
+
+        landmarkByCode.push({ key: normCode, rawName, lat, lng });
+      }
+    }
+
+    return { city, landmarkByCode, landmarkByName };
+  });
 
   const cityByNormName = new Map<string, LocationEntry>();
   wire.city.forEach((c) => {
     if (c.lat == null || c.lng == null) return;
     if (!cityByNormName.has(c.key)) {
-      cityByNormName.set(c.key, {
-        rawName: c.rawName,
-        lat: c.lat,
-        lng: c.lng,
-      });
+      cityByNormName.set(c.key, { rawName: c.rawName, lat: c.lat, lng: c.lng });
     }
   });
 
@@ -899,11 +779,7 @@ async function fetchLocationMaps(page: Page): Promise<LocationMaps> {
   wire.landmarkByCode.forEach((lm) => {
     if (lm.lat == null || lm.lng == null) return;
     if (!landmarkByNormCode.has(lm.key)) {
-      landmarkByNormCode.set(lm.key, {
-        rawName: lm.rawName,
-        lat: lm.lat,
-        lng: lm.lng,
-      });
+      landmarkByNormCode.set(lm.key, { rawName: lm.rawName, lat: lm.lat, lng: lm.lng });
     }
   });
 
@@ -911,11 +787,7 @@ async function fetchLocationMaps(page: Page): Promise<LocationMaps> {
   wire.landmarkByName.forEach((lm) => {
     if (lm.lat == null || lm.lng == null) return;
     if (!landmarkByNormName.has(lm.key)) {
-      landmarkByNormName.set(lm.key, {
-        rawName: lm.rawName,
-        lat: lm.lat,
-        lng: lm.lng,
-      });
+      landmarkByNormName.set(lm.key, { rawName: lm.rawName, lat: lm.lat, lng: lm.lng });
     }
   });
 
@@ -923,31 +795,21 @@ async function fetchLocationMaps(page: Page): Promise<LocationMaps> {
     `Location maps built: cities=${cityByNormName.size}, landmarksByCode=${landmarkByNormCode.size}, landmarksByName=${landmarkByNormName.size}`,
   );
 
-  return {
-    cityByNormName,
-    landmarkByNormCode,
-    landmarkByNormName,
-  };
+  return { cityByNormName, landmarkByNormCode, landmarkByNormName };
 }
 
-// Override route-level source/destination lat/lng using FMS location maps,
-// but only as:
-//   final = FMS value if available, else DB value, else null.
-function attachLocationCoordsFromFms(
-  merged: LiveMergedRow[],
-  loc: LocationMaps,
-): void {
+// Override route-level source/destination lat/lng using FMS location maps
+function attachLocationCoordsFromFms(merged: LiveMergedRow[], loc: LocationMaps): void {
   for (const row of merged) {
     const consigner = row.consignerName;
     const consignee = row.consigneeName;
 
-    // ---------- FMS candidate coordinates ----------
     let fmsSrcLat: number | null = null;
     let fmsSrcLng: number | null = null;
     let fmsDestLat: number | null = null;
     let fmsDestLng: number | null = null;
 
-    // Source (consigner) -> city first
+    // Source -> city first
     const srcCityRaw = extractCityFromConsignerName(consigner);
     if (srcCityRaw) {
       const key = normalizeLocationKey(srcCityRaw);
@@ -964,7 +826,7 @@ function attachLocationCoordsFromFms(
       }
     }
 
-    // Destination (consignee) -> branch code, then city fallback
+    // Destination -> branch code first
     const destBranchCode = extractBranchCodeFromConsignee(consignee);
     if (destBranchCode) {
       const codeKey = normalizeLocationKey(destBranchCode);
@@ -975,6 +837,7 @@ function attachLocationCoordsFromFms(
       }
     }
 
+    // Destination -> city fallback
     if (fmsDestLat == null || fmsDestLng == null) {
       const destCityRaw = extractCityFromConsigneeName(consignee);
       if (destCityRaw) {
@@ -993,38 +856,23 @@ function attachLocationCoordsFromFms(
       }
     }
 
-    // ---------- Final values: FMS first, then DB, else null ----------
-
-    const dbSrcLat =
-      typeof row.routeSourceLat === 'number' ? row.routeSourceLat : null;
-    const dbSrcLng =
-      typeof row.routeSourceLng === 'number' ? row.routeSourceLng : null;
+    const dbSrcLat = typeof row.routeSourceLat === 'number' ? row.routeSourceLat : null;
+    const dbSrcLng = typeof row.routeSourceLng === 'number' ? row.routeSourceLng : null;
     const dbDestLat =
-      typeof row.routeDestinationLat === 'number'
-        ? row.routeDestinationLat
-        : null;
+      typeof row.routeDestinationLat === 'number' ? row.routeDestinationLat : null;
     const dbDestLng =
-      typeof row.routeDestinationLng === 'number'
-        ? row.routeDestinationLng
-        : null;
+      typeof row.routeDestinationLng === 'number' ? row.routeDestinationLng : null;
 
-    const finalSrcLat =
-      (typeof fmsSrcLat === 'number' ? fmsSrcLat : null) ?? dbSrcLat ?? null;
-    const finalSrcLng =
-      (typeof fmsSrcLng === 'number' ? fmsSrcLng : null) ?? dbSrcLng ?? null;
-    const finalDestLat =
+    row.routeSourceLat = (typeof fmsSrcLat === 'number' ? fmsSrcLat : null) ?? dbSrcLat ?? null;
+    row.routeSourceLng = (typeof fmsSrcLng === 'number' ? fmsSrcLng : null) ?? dbSrcLng ?? null;
+    row.routeDestinationLat =
       (typeof fmsDestLat === 'number' ? fmsDestLat : null) ?? dbDestLat ?? null;
-    const finalDestLng =
+    row.routeDestinationLng =
       (typeof fmsDestLng === 'number' ? fmsDestLng : null) ?? dbDestLng ?? null;
-
-    row.routeSourceLat = finalSrcLat;
-    row.routeSourceLng = finalSrcLng;
-    row.routeDestinationLat = finalDestLat;
-    row.routeDestinationLng = finalDestLng;
   }
 }
 
-// ------------------- NEW: fuzzy location matching helpers (Location table) -------------------
+// ------------------- Location-table enrichment (unchanged from your logic) -------------------
 
 type LocationRow = { name: string; Latitude: number; Longitude: number };
 
@@ -1033,17 +881,15 @@ type LocationMatchScore = {
   byCode: boolean;
 };
 
-// Basic text normalisation for location names
 function normalizeBaseName(s: string): string {
   return String(s || '')
     .toLowerCase()
-    .replace(/\s*\(/g, ' (') // ensure space before "("
-    .replace(/[^a-z0-9()\s]+/g, ' ') // keep only alnum, space, and ()
+    .replace(/\s*\(/g, ' (')
+    .replace(/[^a-z0-9()\s]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Extract last code in parentheses, e.g. "(AML11)" -> "aml11"
 function extractCodeLower(name: string): string {
   const str = normalizeBaseName(name);
   const matches = str.match(/\(([^)]+)\)/g);
@@ -1052,46 +898,32 @@ function extractCodeLower(name: string): string {
   return last.replace(/[()]/g, '').trim().toLowerCase();
 }
 
-// Tokenise name (excluding code part)
 function tokenizeNameWithoutCode(name: string): string[] {
   let norm = normalizeBaseName(name);
-
-  // remove parentheses content to avoid mixing code into tokens
   norm = norm.replace(/\([^)]*\)/g, ' ');
 
   const tokens = norm.split(/\s+/).filter(Boolean);
-
-  // optional: remove very generic stopwords
   const stopwords = new Set(['at', 'hub', 'the', 'pvt', 'ltd']);
   return tokens.filter((t) => !stopwords.has(t));
 }
 
-// Jaccard similarity between two token sets
 function jaccardSimilarity(tokensA: string[], tokensB: string[]): number {
   const setA = new Set(tokensA);
   const setB = new Set(tokensB);
 
   let common = 0;
-  for (const t of setA) {
-    if (setB.has(t)) common++;
-  }
+  for (const t of setA) if (setB.has(t)) common++;
 
   const unionSize = setA.size + setB.size - common;
   if (unionSize === 0) return 0;
   return common / unionSize;
 }
 
-function computeLocationMatchScore(
-  endpointName: string,
-  candidateName: string,
-): LocationMatchScore {
+function computeLocationMatchScore(endpointName: string, candidateName: string): LocationMatchScore {
   const code1 = extractCodeLower(endpointName);
   const code2 = extractCodeLower(candidateName);
 
-  // Hard match on code, if both non-empty and equal
-  if (code1 && code2 && code1 === code2) {
-    return { score: 1.0, byCode: true };
-  }
+  if (code1 && code2 && code1 === code2) return { score: 1.0, byCode: true };
 
   const tokens1 = tokenizeNameWithoutCode(endpointName);
   const tokens2 = tokenizeNameWithoutCode(candidateName);
@@ -1100,57 +932,25 @@ function computeLocationMatchScore(
   return { score, byCode: false };
 }
 
-// Given an endpoint name, find best matching Location row using:
-// 1) Exact name match (case-insensitive)
-// 2) Exact name match with spaces removed
-// 3) Code match / token Jaccard (≥ threshold)
-// Build a "core" search key from endpoint name (source/destination)
 function buildEndpointCoreKey(name: string): string {
   let s = String(name || '').toLowerCase();
-
-  // remove anything in parentheses
   s = s.replace(/\([^)]*\)/g, ' ');
-
-  // replace hyphens with space (main symbol)
   s = s.replace(/-/g, ' ');
-
-  // remove other symbols
   s = s.replace(/[^a-z0-9\s]+/g, ' ');
-
-  // collapse spaces
   s = s.replace(/\s+/g, ' ').trim();
-
-  // remove 'safexpress' prefix
   s = s.replace(/^safexpress\s+/, '');
-
-  // remove suffixes: hub, sds, inbound, outbound
   s = s.replace(/\s+(hub|sds|inbound|outbound)\s*$/g, '');
-
-  // collapse spaces again
   s = s.replace(/\s+/g, ' ').trim();
-
-  // finally remove all spaces → pure core
   s = s.replace(/\s+/g, '');
-
   return s;
 }
 
-// Build a comparable core from Location.name
 function buildLocationCoreKey(name: string): string {
   let s = String(name || '').toLowerCase();
-
-  // remove anything in parentheses
   s = s.replace(/\([^)]*\)/g, ' ');
-
-  // replace hyphens with space
   s = s.replace(/-/g, ' ');
-
-  // remove other symbols
   s = s.replace(/[^a-z0-9\s]+/g, ' ');
-
-  // remove all spaces
   s = s.replace(/\s+/g, '');
-
   return s;
 }
 
@@ -1162,60 +962,32 @@ function findBestLocationMatch(
   if (!endpointName.trim() || !locs.length) return null;
 
   const endpointTrim = endpointName.trim();
-
-  // 1) Exact match (case-insensitive, normal spaces)
   const endpointNorm = endpointTrim.toLowerCase();
-  const exact = locs.find(
-    (l) => l.name.trim().toLowerCase() === endpointNorm,
-  );
+
+  const exact = locs.find((l) => l.name.trim().toLowerCase() === endpointNorm);
   if (exact) return exact;
 
-  // 2) Exact match AFTER removing all spaces (case-insensitive)
   const endpointNoSpace = endpointNorm.replace(/\s+/g, '');
-  const exactNoSpace = locs.find((l) => {
-    const nameNoSpace = l.name.trim().toLowerCase().replace(/\s+/g, '');
-    return nameNoSpace === endpointNoSpace;
-  });
+  const exactNoSpace = locs.find((l) => l.name.trim().toLowerCase().replace(/\s+/g, '') === endpointNoSpace);
   if (exactNoSpace) return exactNoSpace;
 
-  // 3) SEARCH-STYLE MATCH:
-  //    string1 = endpointCore (source/dest cleaned)
-  //    string2 = locCore (Location.name cleaned)
-  //    condition: string1 is inside string2
   const endpointCore = buildEndpointCoreKey(endpointName);
   if (endpointCore) {
     const searchMatch = locs.find((l) => {
-      // Remove spaces from Location.name FIRST (your requirement)
       const locNoSpace = l.name.toLowerCase().replace(/\s+/g, '');
-
-      // Also create the full cleaned core version of Location.name
       const locCore = buildLocationCoreKey(l.name);
-
-      // Check both:
-      // 1) raw Location.name without spaces includes endpointCore
-      // 2) fully cleaned location core includes endpointCore
       return locNoSpace.includes(endpointCore) || locCore.includes(endpointCore);
     });
-
     if (searchMatch) return searchMatch;
   }
 
-
-  // 4) If still nothing: fall back to code + Jaccard logic
   let best: LocationRow | null = null;
   let bestScore = 0;
   let bestByCode = false;
 
   for (const loc of locs) {
-    const { score, byCode } = computeLocationMatchScore(
-      endpointName,
-      loc.name,
-    );
-
-    const isBetter =
-      score > bestScore ||
-      (byCode && !bestByCode && score === bestScore);
-
+    const { score, byCode } = computeLocationMatchScore(endpointName, loc.name);
+    const isBetter = score > bestScore || (byCode && !bestByCode && score === bestScore);
     if (isBetter) {
       best = loc;
       bestScore = score;
@@ -1225,24 +997,15 @@ function findBestLocationMatch(
 
   if (!best) return null;
   if (bestScore < threshold) return null;
-
   return best;
 }
 
-
-// ------------------- NEW: fallback from Location table -------------------
-
-// When route coords are still null after FMS and Route DB coords,
-// fill them using Location table with fuzzy matching strategy.
-async function enrichLiveRoutesWithLocation(
-  liveRoutes: LiveRouteRoute[],
-): Promise<void> {
+async function enrichLiveRoutesWithLocation(liveRoutes: LiveRouteRoute[]): Promise<void> {
   if (!liveRoutes.length) {
     console.log('No live routes to enrich from Location table.');
     return;
   }
 
-  // Fetch all locations (we need whole list for fuzzy matching)
   const locs = await prisma.location.findMany({
     select: { name: true, Latitude: true, Longitude: true },
   });
@@ -1270,40 +1033,32 @@ async function enrichLiveRoutesWithLocation(
     }
   }
 
-  console.log(
-    'Location enrichment with fuzzy matching completed for',
-    liveRoutes.length,
-    'routes.',
-  );
+  console.log('Location enrichment with fuzzy matching completed for', liveRoutes.length, 'routes.');
 }
 
 async function syncLiveRoutesToDb(liveRoutes: LiveRouteRoute[]) {
   const now = new Date();
 
-  // Before saving, enrich missing coords from Location table (fuzzy)
   await enrichLiveRoutesWithLocation(liveRoutes);
 
-  // ----- 1) Prepare LiveRoute rows in memory -----
-  const routesData: Prisma.LiveRouteCreateManyInput[] =
-    liveRoutes.map((r) => ({
-      id: r.id, // route.id from your aggregation
-      source: r.source,
-      destination: r.destination,
-      sourceLat: r.sourceLat ?? null,
-      sourceLng: r.sourceLng ?? null,
-      destLat: r.destLat ?? null,
-      destLng: r.destLng ?? null,
-      updatedAt: now,
-    }));
+  const routesData: Prisma.LiveRouteCreateManyInput[] = liveRoutes.map((r) => ({
+    id: r.id,
+    source: r.source,
+    destination: r.destination,
+    sourceLat: r.sourceLat ?? null,
+    sourceLng: r.sourceLng ?? null,
+    destLat: r.destLat ?? null,
+    destLng: r.destLng ?? null,
+    updatedAt: now,
+  }));
 
-  // ----- 2) Prepare LiveVehicle rows in memory -----
   const vehiclesData: Prisma.LiveVehicleCreateManyInput[] = [];
 
   for (const route of liveRoutes) {
     const pushSide = (side: 'Up' | 'Down', bucket: LiveRouteSideBucket) => {
       for (const v of bucket.vehicles) {
         vehiclesData.push({
-          id: randomUUID(), // LiveVehicle.id has no default in schema
+          id: randomUUID(),
           vehicleNumber: v.vehicleNumber ?? null,
           rpsNumber: v.rpsNumber ?? null,
           dispatchDate: safeDate(v.dispatchDate),
@@ -1320,28 +1075,18 @@ async function syncLiveRoutesToDb(liveRoutes: LiveRouteRoute[]) {
       }
     };
 
-    // Trip side Up/Down kept exactly as before
     pushSide('Up', route.up);
     pushSide('Down', route.down);
   }
 
-  console.log(
-    `Prepared ${routesData.length} LiveRoute rows and ${vehiclesData.length} LiveVehicle rows.`,
-  );
+  console.log(`Prepared ${routesData.length} LiveRoute rows and ${vehiclesData.length} LiveVehicle rows.`);
 
-  // ----- 3) Atomic snapshot write (transaction) -----
   await prisma.$transaction(async (tx) => {
-    // delete children first because of FK routeId → LiveRoute.id
     await tx.liveVehicle.deleteMany({});
     await tx.liveRoute.deleteMany({});
 
-    if (routesData.length > 0) {
-      await tx.liveRoute.createMany({ data: routesData });
-    }
-
-    if (vehiclesData.length > 0) {
-      await tx.liveVehicle.createMany({ data: vehiclesData });
-    }
+    if (routesData.length > 0) await tx.liveRoute.createMany({ data: routesData });
+    if (vehiclesData.length > 0) await tx.liveVehicle.createMany({ data: vehiclesData });
   });
 
   console.log('Live route snapshot saved to database (transaction committed).');
@@ -1349,46 +1094,40 @@ async function syncLiveRoutesToDb(liveRoutes: LiveRouteRoute[]) {
 
 // ------------------- DATE PARSING HELPERS -------------------
 
-// Parse known date-time formats into JS Date:
-// 1) "YYYY-MM-DD HH:MM:SS"   (Last Location Date)
-// 2) "DD/MM/YYYY HH:MM:SS"   (Dispatch Date, ETA)
 function parseCustomDateTimeString(raw: string): Date | null {
   const value = raw.trim();
   if (!value) return null;
 
-  // 1) YYYY-MM-DD HH:MM:SS
-  const isoLike =
-    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/;
+  const isoLike = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/;
   const isoMatch = value.match(isoLike);
   if (isoMatch) {
     const [, y, m, d, hh, mm, ss] = isoMatch;
-    const year = parseInt(y, 10);
-    const month = parseInt(m, 10) - 1;
-    const day = parseInt(d, 10);
-    const hour = parseInt(hh, 10);
-    const minute = parseInt(mm, 10);
-    const second = parseInt(ss, 10);
-    const date = new Date(year, month, day, hour, minute, second);
+    const date = new Date(
+      parseInt(y, 10),
+      parseInt(m, 10) - 1,
+      parseInt(d, 10),
+      parseInt(hh, 10),
+      parseInt(mm, 10),
+      parseInt(ss, 10),
+    );
     if (!isNaN(date.getTime())) return date;
   }
 
-  // 2) DD/MM/YYYY HH:MM:SS
-  const dmyLike =
-    /^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2}):(\d{2})$/;
+  const dmyLike = /^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2}):(\d{2})$/;
   const dmyMatch = value.match(dmyLike);
   if (dmyMatch) {
     const [, dd, mm, yyyy, hh, mi, ss] = dmyMatch;
-    const day = parseInt(dd, 10);
-    const month = parseInt(mm, 10) - 1;
-    const year = parseInt(yyyy, 10);
-    const hour = parseInt(hh, 10);
-    const minute = parseInt(mi, 10);
-    const second = parseInt(ss, 10);
-    const date = new Date(year, month, day, hour, minute, second);
+    const date = new Date(
+      parseInt(yyyy, 10),
+      parseInt(mm, 10) - 1,
+      parseInt(dd, 10),
+      parseInt(hh, 10),
+      parseInt(mi, 10),
+      parseInt(ss, 10),
+    );
     if (!isNaN(date.getTime())) return date;
   }
 
-  // Fallback: let JS try
   const fallback = new Date(value);
   if (!isNaN(fallback.getTime())) return fallback;
 
@@ -1399,9 +1138,7 @@ function parseCustomDateTimeString(raw: string): Date | null {
 function safeDate(value: string | Date | null | undefined): Date | null {
   if (!value) return null;
 
-  if (value instanceof Date) {
-    return isNaN(value.getTime()) ? null : value;
-  }
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
 
   if (typeof value === 'string') {
     const parsed = parseCustomDateTimeString(value);
@@ -1410,7 +1147,6 @@ function safeDate(value: string | Date | null | undefined): Date | null {
     return null;
   }
 
-  // Any other type is unexpected; try generic parsing then.
   const d = new Date(value as any);
   if (isNaN(d.getTime())) {
     console.warn('Invalid date value encountered:', value, '→ storing null');
@@ -1426,37 +1162,32 @@ async function main() {
   const headless = (process.env.HEADLESS ?? 'true').toLowerCase() === 'true';
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({ acceptDownloads: true });
-  
-  // FIX: tsx/esbuild injects __name(...) into evaluated functions.
-  // Define __name globally inside the page context so page.evaluate never crashes.
-  await context.addInitScript({
-    content: 'var __name = (target, name) => target;'
-  });
-  
-  const page = await context.newPage();
 
+  // NOTE: Keep this safety net. It does not hurt.
+  // If any evaluated payload still contains __name wrappers, this prevents crashes.
+  await context.addInitScript({
+    content: 'var __name = (target, name) => target;',
+  });
+
+  const page = await context.newPage();
 
   console.log('Opening login page:', FMS_URL);
   await page.goto(FMS_URL, { waitUntil: 'networkidle' });
 
-  // ---- LOGIN ----
   console.log('Filling login form…');
 
-  // Username
   try {
     await page.getByPlaceholder(/user/i).fill(USERNAME_STR);
   } catch {
     await page.fill('input[type="text"]', USERNAME_STR);
   }
 
-  // Password
   try {
     await page.getByPlaceholder(/password/i).fill(PASSWORD_STR);
   } catch {
     await page.fill('input[type="password"]', PASSWORD_STR);
   }
 
-  // Submit
   try {
     await page.click('#mysubmit');
   } catch {
@@ -1471,13 +1202,11 @@ async function main() {
   console.log('Logged in, waiting for dashboard…');
   await page.waitForTimeout(3000);
 
-  // ---- GRID VIEW (hover card then click) ----
   console.log('Hovering on the "On Trip Vehicles" card and clicking Grid View…');
 
   const onTripCard = page.locator('#onTrip');
-
   await onTripCard.hover();
-  await page.waitForTimeout(700); // let the hover effect show the button
+  await page.waitForTimeout(700);
 
   const gridViewButton = onTripCard.locator('button#dropdownMenuButton');
   await gridViewButton.waitFor({ state: 'visible', timeout: 5000 });
@@ -1486,7 +1215,6 @@ async function main() {
   console.log('Grid View clicked, waiting for grid to load…');
   await page.waitForTimeout(2000);
 
-  // ---- DOWNLOAD EXCEL (in memory) ----
   console.log('Clicking "Download Excel" button…');
 
   const [download] = await Promise.all([
@@ -1502,9 +1230,7 @@ async function main() {
   }
 
   const chunks: Uint8Array[] = [];
-  for await (const chunk of stream as any) {
-    chunks.push(chunk);
-  }
+  for await (const chunk of stream as any) chunks.push(chunk);
   const excelBuffer = Buffer.concat(chunks);
 
   const workbook = XLSX.read(excelBuffer, { type: 'buffer' });
@@ -1513,47 +1239,30 @@ async function main() {
 
   const rows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-  // ---- PARSE EXCEL ----
   const records = parseRows(rows);
-
   console.log(`Extracted ${records.length} rows from Excel.`);
 
-  // ---- MERGE WITH ROUTE MASTER (DB) ----
   const routeIndex = await buildRouteIndex();
   const merged = mergeWithRoutes(records, routeIndex);
 
-  // ---- FETCH LIVE VEHICLE COORDINATES FROM MAP VIEW ----
   const coordsByVehicle = await fetchLiveVehicleCoords(page);
-
-  // ---- BUILD LOCATION MAPS (cities + landmarks) FROM MAP VIEW ----
   const locationMaps = await fetchLocationMaps(page);
 
-  // ---- APPLY FMS COORDS (FMS first, then DB, else null) ----
   attachLocationCoordsFromFms(merged, locationMaps);
 
-  // ---- AGGREGATE INTO FINAL PER-ROUTE STRUCTURE (ONLY MATCHED) ----
-  const liveRoutes: LiveRouteRoute[] = aggregateLiveRoutes(
-    merged,
-    coordsByVehicle,
-  );
+  const liveRoutes: LiveRouteRoute[] = aggregateLiveRoutes(merged, coordsByVehicle);
 
   console.log('All live routes (matched):');
   console.dir(liveRoutes, { depth: null, maxArrayLength: null });
 
-  // ---- COLLECT UNMATCHED ROUTE PAIRS FOR LATER FIXING ----
   const unmatchedRoutes = collectUnmatched(merged);
-  console.log(
-    `\nUnmatched route pairs (${unmatchedRoutes.length} unique):`,
-  );
+  console.log(`\nUnmatched route pairs (${unmatchedRoutes.length} unique):`);
   console.dir(unmatchedRoutes, { depth: null, maxArrayLength: null });
 
-  // ---- STORE UNMATCHED ROUTES INTO UnmatchedTripSide (unique RouteName) ----
   await saveUnmatchedToDb(unmatchedRoutes);
-
   await syncLiveRoutesToDb(liveRoutes);
 
   await browser.close();
-
 }
 
 // ------------------- RUN -------------------
