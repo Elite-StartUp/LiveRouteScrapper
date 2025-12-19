@@ -704,7 +704,23 @@ async function fetchLiveVehicleCoords(
 
     await allVehiclesCheckbox.waitFor({ state: 'visible', timeout: 10000 });
 
-    await allVehiclesCheckbox.check({ force: true });
+    try {
+      const allVehiclesLabel = page.locator('label.checkmark-container:has-text("All Vehicles")');
+      await allVehiclesLabel.waitFor({ state: 'visible', timeout: 10000 });
+    
+      await allVehiclesLabel.scrollIntoViewIfNeeded();
+      await allVehiclesLabel.click({ force: true });
+    
+      console.log('Clicked "All Vehicles" label on Map View.');
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(2000);
+    } catch (err) {
+      console.warn(
+        'Could not click "All Vehicles" (maybe already checked or selector mismatch):',
+        err,
+      );
+    }
+
     console.log('Clicked "All Vehicles" checkbox on Map View.');
 
     await page.waitForLoadState('networkidle').catch(() => {});
@@ -1410,7 +1426,15 @@ async function main() {
   const headless = (process.env.HEADLESS ?? 'true').toLowerCase() === 'true';
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({ acceptDownloads: true });
+  
+  // FIX: tsx/esbuild injects __name(...) into evaluated functions.
+  // Define __name globally inside the page context so page.evaluate never crashes.
+  await context.addInitScript({
+    content: 'var __name = (target, name) => target;'
+  });
+  
   const page = await context.newPage();
+
 
   console.log('Opening login page:', FMS_URL);
   await page.goto(FMS_URL, { waitUntil: 'networkidle' });
