@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
     "scrape:live": "tsx script/liveRouteScrapper.ts"
+    "scrape:rps": "tsx script/rpsTripScrapper.ts"
   },
   "keywords": [],
   "author": "",
